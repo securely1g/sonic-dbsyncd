@@ -3,11 +3,11 @@
 import copy
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -18,14 +18,29 @@ from lldp_syncd.daemon import LldpSyncDaemon, SONIC_ETHERNET_RE_PATTERN
 
 
 def main():
-    site, fixture = map(Path, sys.argv[1:3])
+    site, fixture, runtime_archive = map(Path, sys.argv[1:])
     assert Path(lldp_syncd.__file__).resolve().is_relative_to(site.resolve())
-    runtime = Path(os.environ["SWSS_RUNTIME_ROOT"]).resolve()
-    executable = runtime / "usr/bin/redis-server"
-    assert executable.is_file() and executable.resolve().is_relative_to(runtime)
     # Keep the socket path within Linux's sockaddr_un limit even under long Bazel paths.
     with tempfile.TemporaryDirectory(prefix="dbsyncd-", dir="/tmp") as temporary:
         work = Path(temporary)
+        # Only the Redis subprocess needs the Trixie runtime. The Python binding
+        # has its own native runfiles, including libnl-route and libyang.
+        runtime = work / "runtime"
+        libdir = Path("usr/lib/x86_64-linux-gnu")
+        with tarfile.open(runtime_archive) as archive:
+            members = []
+            for member in archive:
+                path = Path(member.name)
+                if path.parent == libdir and ".so" in path.name:
+                    members.append(member)
+                elif path.parent == Path("usr/bin") and path.name.startswith("redis-"):
+                    members.append(member)
+            archive.extractall(runtime, members=members, filter="data")
+        executable = runtime / "usr/bin/redis-server"
+        assert executable.is_file() and executable.resolve().is_relative_to(runtime)
+        libraries = runtime / libdir
+        loader = libraries / "ld-linux-x86-64.so.2"
+        redis_command = [str(loader), "--inhibit-cache", "--library-path", str(libraries), str(executable)]
         redis_socket = str(work / "redis.sock")
         config = work / "database_config.json"
         config.write_text(json.dumps({
@@ -35,7 +50,7 @@ def main():
             "VERSION": "1.0",
         }))
         with (work / "redis.log").open("w+") as log:
-            process = subprocess.Popen([str(executable), "--port", "0", "--unixsocket", redis_socket,
+            process = subprocess.Popen([*redis_command, "--port", "0", "--unixsocket", redis_socket,
                                         "--save", "", "--appendonly", "no", "--dir", str(work)],
                                        stdout=log, stderr=subprocess.STDOUT)
             try:

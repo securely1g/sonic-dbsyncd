@@ -15,7 +15,7 @@ from tools.bazel.tests.integration.wheel_contract import setup_contract
 
 
 parser = argparse.ArgumentParser()
-for name in ("wheel", "runtime-tar", "setup", "common-wheel", "redis-probe"):
+for name in ("wheel", "runtime-tar", "setup", "common-wheel", "redis-probe", "redis-runtime"):
     parser.add_argument("--" + name, type=Path, required=True)
 INPUTS, REST = parser.parse_known_args()
 DETAILS = {}
@@ -122,6 +122,7 @@ print(json.dumps({'installed_modules': list(modules), 'module_entry_dispatch': T
         result = subprocess.run([
             str(self.installed.python), "-I", str(INPUTS.redis_probe.absolute()),
             str(self.installed.site), str(self.setup.parent / "tests/subproc_outputs/lldpctl.json"),
+            str(INPUTS.redis_runtime.absolute()),
         ], cwd=self.installed.root, env=self.installed.env, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         DETAILS.update(json.loads(result.stdout))
